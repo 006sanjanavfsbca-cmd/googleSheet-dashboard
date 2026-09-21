@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vonnue School of Computing — Trainee Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div>
+      <div class="brand">
+        <div class="mark">{V}</div>
+        <small>BCA COMPUTING PROGRAMME</small>
+      </div>
+      <h1>Vonnue School of Computing</h1>
+      <p>Daily task &amp; focus tracker for the BCA trainee batch</p>
+    </div>
+    <div class="controls">
+      <span class="chip">SOURCE: GOOGLE SHEETS</span>
+      <div class="synced" id="synced">Not synced yet</div>
+      <button class="sync" id="syncBtn">Sync from Google Sheets</button>
+      <div class="field">
+        <label for="monthSel">Month</label>
+        <select id="monthSel"></select>
+      </div>
+      <div class="field">
+        <label for="traineeSel">Trainee</label>
+        <select id="traineeSel"></select>
+      </div>
+    </div>
+  </header>
+
+  <div id="setup" class="card setup" hidden>
+    <h3>Connect your sheet</h3>
+    <p class="note tight">Paste the link of <b>Tasks_&amp;_Marks_Records</b>. In Google Sheets open <b>Share → General access → Anyone with the link → Viewer</b> first, otherwise the dashboard cannot read it.</p>
+    <div class="row">
+      <input class="txt" id="sheetInput" placeholder="https://docs.google.com/spreadsheets/d/…">
+      <button id="saveSheet">Save and sync</button>
+    </div>
+  </div>
+
+  <div id="error" class="err" hidden></div>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" data-view="one" aria-selected="true">Dashboard View</button>
+    <button class="tab" role="tab" data-view="team" aria-selected="false">Team Performance</button>
+    <button class="tab" role="tab" data-view="marks" aria-selected="false">BCA Marks</button>
+  </nav>
+
+  <!-- individual -->
+  <section id="view-one">
+    <div class="grid k4" id="oneKpis"></div>
+    <div class="grid k4 mt" id="codeKpis"></div>
+    <div class="grid k2 mt">
+      <div class="card"><h3>Focus hours by day</h3><div id="dailyChart"></div></div>
+      <div class="card"><h3>Task status</h3><div id="statusChart"></div></div>
+    </div>
+    <div class="card mt">
+      <h3>Task log</h3>
+      <div class="scroll" id="taskTable"></div>
+    </div>
+    <div class="card mt">
+      <h3>Issues and doubts raised</h3>
+      <div id="issueList"></div>
+    </div>
+  </section>
+
+  <!-- team -->
+  <section id="view-team" hidden>
+    <div class="grid k4" id="teamKpis"></div>
+    <div class="grid k2 mt">
+      <div class="card"><h3>Focus hours: selected trainee vs team</h3><div id="teamHours"></div></div>
+      <div class="card"><h3>Task completion rate</h3><div id="teamRate"></div></div>
+    </div>
+    <div class="card mt">
+      <h3>Team leaderboard</h3>
+      <div class="scroll" id="teamTable"></div>
+    </div>
+  </section>
+
+  <!-- marks -->
+  <section id="view-marks" hidden>
+    <div class="card">
+      <h3>BCA MARKS sheet</h3>
+      <div class="scroll" id="marksTable"></div>
+    </div>
+  </section>
+
+  <p class="note" id="footnote"></p>
+</div>
+
+<script src="dashboard.js"></script>
+</body>
+</html>
