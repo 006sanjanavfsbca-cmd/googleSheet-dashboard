@@ -7,7 +7,7 @@ const CONFIG = {
   sheetId: "",
   // Tab names exactly as they appear at the bottom of the sheet
   trainees: ["Alvin","Goutham","Sarath","Ilfa","Sanjana","Sneha","Lena"],
-  marksTab: "BCA MARKS",
+  marksTab: "Mark sheet",
   // Words in the Status column that count as finished
   doneWords: ["done","completed","complete","finished","yes","closed"],
   progressWords: ["progress","ongoing","working","started","wip"]
@@ -256,7 +256,7 @@ function barsByDay(rs, mk){
 }
 
 function donut(st){
-  const parts = [["Completed",st.done,"#5b3f9e"],["In progress",st.prog,"#c98a2e"],["Open",st.open,"#c2545f"]];
+  const parts = [["Completed",st.done,"#5b3f9e"],[" In progress",st.prog,"#c98a2e"],[" Open",st.open,"#c2545f"]];
   const total = st.tasks;
   if(!total) return '<p class="empty">No tasks logged for this month.</p>';
   const R=58, C=2*Math.PI*R; let off=0;
