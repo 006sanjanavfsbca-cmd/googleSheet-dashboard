@@ -276,7 +276,7 @@ function donut(st){
 }
 
 function hbars(list, valueFn, labelFn, selected, color){
-  if(!list.length) return '<p class="empty">Nothing to compare yet.</p>';
+  if(!list.length) return '<p class="empty"></p>';
   const max = Math.max(1, ...list.map(valueFn));
   const rowH=30, W=560, labelW=74, H=list.length*rowH+8;
   let s = `<svg viewBox="0 0 ${W} ${H}">`;
@@ -352,7 +352,7 @@ function render(){
         <b class="issue-date">${r.date?r.date.toLocaleDateString():r.dateRaw}</b>
         <span class="issue-task"> · ${esc(r.task)||"task not named"}</span>
         <div>${esc(r.issue)}</div></div>`).join("")
-    : '<p class="empty">Nothing raised this month.</p>';
+    : '<p class="empty"></p>';
 
   /* --- team --- */
   const top = [...all].sort((a,b)=>b.minutes-a.minutes)[0];
