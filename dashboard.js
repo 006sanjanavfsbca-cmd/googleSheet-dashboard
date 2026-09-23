@@ -215,7 +215,25 @@ function rowsFor(name, mk){
 function stats(name, mk){
   const rs = rowsFor(name, mk).filter(r=>r.task || r.dur || r.start);
   const statusMap = currentStatusMap(rs);
-  let mins=0, done=0, prog=0, open=0, issues=0;
+
+  // Completion counts, rate, and the donut should reflect distinct TASKS,
+  // not log rows — a task worked on across 3 rows is 1 task, not 3.
+  // Rows with no task name have nothing to group by, so each counts as
+  // its own task.
+  const taskGroups = {};
+  let anon = 0;
+  rs.forEach(r=>{
+    const key = taskKey(r.task) || ("__row"+(anon++));
+    (taskGroups[key] = taskGroups[key] || []).push(r);
+  });
+  const tasks = Object.keys(taskGroups).length;
+  let done=0, prog=0, open=0;
+  Object.keys(taskGroups).forEach(key=>{
+    const s = statusMap[key] || statusOf(taskGroups[key][taskGroups[key].length-1]);
+    if(s==="done") done++; else if(s==="progress") prog++; else open++;
+  });
+
+  let mins=0, issues=0;
   let codeMins=0, screenMins=0, totalLOC=0, langTasks=0;
   const langCount = {};
   const days = new Set();
@@ -226,8 +244,6 @@ function stats(name, mk){
     // must come from that column, not be re-derived from Duration/Start-End.
     mins += focusMinutesOf(r);
     if(m>0 && r.date) days.add(r.date.toDateString());
-    const s = effectiveStatus(r, statusMap);
-    if(s==="done") done++; else if(s==="progress") prog++; else open++;
     if(r.issue) issues++;
 
     // --- new columns ---
@@ -236,7 +252,6 @@ function stats(name, mk){
     totalLOC += locOf(r);
     if(r.lang){ langCount[r.lang] = (langCount[r.lang]||0) + 1; langTasks++; }
   });
-  const tasks = rs.length;
 
   // Pick whichever language shows up the most for this trainee.
   let mainLang = "—";
@@ -359,9 +374,18 @@ function render(){
   const totalLabel = me.name+" total";
 
   const lastDayMins   = dayRows.reduce((a,r)=>a+focusMinutesOf(r),0);
-  const lastDayTasks  = dayRows.length;
-  const lastDayDone   = dayRows.filter(r=>effectiveStatus(r, me.statusMap)==="done").length;
-  const lastDayRate   = dayRows.length ? Math.round(lastDayDone/dayRows.length*100) : 0;
+  // Distinct tasks touched on this day, using each one's current
+  // (latest-known) status — same rule as the totals and the donut.
+  const dayTaskKeys = new Set(dayRows.map(r=>taskKey(r.task)).filter(Boolean));
+  const lastDayTasks = dayTaskKeys.size || dayRows.length;
+  let lastDayDoneCount = 0;
+  if(dayTaskKeys.size){
+    dayTaskKeys.forEach(k=>{ if((me.statusMap[k]||"")==="done") lastDayDoneCount++; });
+  } else {
+    lastDayDoneCount = dayRows.filter(r=>statusOf(r)==="done").length;
+  }
+  const lastDayDone = lastDayDoneCount;
+  const lastDayRate = lastDayTasks ? Math.round(lastDayDone/lastDayTasks*100) : 0;
   const lastDayCode   = dayRows.reduce((a,r)=>a+codeMinutesOf(r),0);
   const lastDayScreen = dayRows.reduce((a,r)=>a+screenMinutesOf(r),0);
   const lastDayLOC    = dayRows.reduce((a,r)=>a+locOf(r),0);
