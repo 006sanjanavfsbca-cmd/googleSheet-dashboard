@@ -12,7 +12,6 @@
 <body>
 <div class="wrap">
 
-  <!-- Top banner: title + the Sync button + Month/Trainee dropdowns -->
   <header class="hero">
     <div>
       <div class="brand">
@@ -37,7 +36,6 @@
     </div>
   </header>
 
-  <!-- Shown once, the first time you open the page with no sheet saved yet -->
   <div id="setup" class="card setup" hidden>
     <h3>Connect your sheet</h3>
     <p class="note tight">Paste the link of <b>Tasks_&amp;_Marks_Records</b>. In Google Sheets open <b>Share → General access → Anyone with the link → Viewer</b> first, otherwise the dashboard cannot read it.</p>
@@ -47,17 +45,15 @@
     </div>
   </div>
 
-  <!-- Only shown if a sync fails (e.g. sheet not shared, tab renamed) -->
   <div id="error" class="err" hidden></div>
 
-  <!-- The 3 tabs. Clicking one just shows/hides the matching <section> below. -->
   <nav class="tabs" role="tablist">
     <button class="tab" role="tab" data-view="one" aria-selected="true">Dashboard View</button>
     <button class="tab" role="tab" data-view="team" aria-selected="false">Team Performance</button>
     <button class="tab" role="tab" data-view="marks" aria-selected="false">BCA Marks</button>
   </nav>
 
-  <!-- TAB 1: one trainee's own numbers -->
+  <!-- individual -->
   <section id="view-one">
     <div class="grid k4" id="oneKpis"></div>
     <div class="grid k4 mt" id="codeKpis"></div>
@@ -69,12 +65,9 @@
       <h3>Task log</h3>
       <div class="scroll" id="taskTable"></div>
     </div>
-    <div class="card mt">
-      <div id="issueList"></div>
-    </div>
   </section>
 
-  <!-- TAB 2: everyone compared side by side -->
+  <!-- team -->
   <section id="view-team" hidden>
     <div class="grid k4" id="teamKpis"></div>
     <div class="grid k2 mt">
@@ -87,7 +80,7 @@
     </div>
   </section>
 
-  <!-- TAB 3: the BCA MARKS sheet, shown as-is -->
+  <!-- marks -->
   <section id="view-marks" hidden>
     <div class="card">
       <h3>BCA MARKS sheet</h3>

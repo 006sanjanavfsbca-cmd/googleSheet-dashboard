@@ -7,7 +7,7 @@ const CONFIG = {
   sheetId: "",
   // Tab names exactly as they appear at the bottom of the sheet
   trainees: ["Alvin","Goutham","Sarath","Ilfa","Sanjana","Sneha","Lena"],
-  marksTab: "Mark sheet",
+  marksTab: "BCA MARKS",
   // Words in the Status column that count as finished
   doneWords: ["done","completed","complete","finished","yes","closed"],
   progressWords: ["progress","ongoing","working","started","wip"]
@@ -166,6 +166,33 @@ function statusOf(r){
   return "open";
 }
 
+// Key used to match up rows that are really the same task logged on
+// different days (e.g. "in progress" one day, "done" a later day).
+const taskKey = s => (s||"").toString().trim().toLowerCase().replace(/\s+/g," ");
+
+// For a set of rows, work out each task's CURRENT status: the status on
+// its most recently dated row. A task marked "in progress" yesterday and
+// "done" today counts as done everywhere it's used for totals/rates —
+// while the raw per-day rows (task log table) still show what was
+// actually recorded that day, unchanged.
+function currentStatusMap(rs){
+  const map = {}, seenDate = {};
+  rs.forEach(r=>{
+    const key = taskKey(r.task);
+    if(!key) return;
+    const d = r.date ? r.date.getTime() : -Infinity;
+    if(!(key in seenDate) || d >= seenDate[key]){
+      seenDate[key] = d;
+      map[key] = statusOf(r);
+    }
+  });
+  return map;
+}
+function effectiveStatus(r, map){
+  const key = taskKey(r.task);
+  return (key && map[key]) ? map[key] : statusOf(r);
+}
+
 const hm = mins => Math.floor(mins/60)+"h "+String(Math.round(mins%60)).padStart(2,"0")+"m";
 const monthKey = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
 const monthLabel = k => {
@@ -187,14 +214,19 @@ function rowsFor(name, mk){
 
 function stats(name, mk){
   const rs = rowsFor(name, mk).filter(r=>r.task || r.dur || r.start);
+  const statusMap = currentStatusMap(rs);
   let mins=0, done=0, prog=0, open=0, issues=0;
   let codeMins=0, screenMins=0, totalLOC=0, langTasks=0;
   const langCount = {};
   const days = new Set();
   rs.forEach(r=>{
-    const m = minutesOf(r); mins += m;
+    const m = minutesOf(r);
+    // Focus Time is its own column in the sheet (like Code/Screen Time) —
+    // usually filled once per day rather than per task row — so the total
+    // must come from that column, not be re-derived from Duration/Start-End.
+    mins += focusMinutesOf(r);
     if(m>0 && r.date) days.add(r.date.toDateString());
-    const s = statusOf(r);
+    const s = effectiveStatus(r, statusMap);
     if(s==="done") done++; else if(s==="progress") prog++; else open++;
     if(r.issue) issues++;
 
@@ -217,7 +249,7 @@ function stats(name, mk){
            activeDays:days.size,
            rate: tasks ? Math.round(done/tasks*100) : 0,
            perDay: days.size ? mins/days.size : 0,
-           codeMins, screenMins, totalLOC, mainLang, langTasks };
+           codeMins, screenMins, totalLOC, mainLang, langTasks, statusMap };
 }
 
 function allMonths(){
@@ -236,7 +268,7 @@ function barsByDay(rs, mk){
   const [y,m] = mk.split("-").map(Number);
   const n = new Date(y, m, 0).getDate();
   const vals = Array(n).fill(0);
-  rs.forEach(r=>{ if(r.date) vals[r.date.getDate()-1] += minutesOf(r); });
+  rs.forEach(r=>{ if(r.date) vals[r.date.getDate()-1] += focusMinutesOf(r); });
   const max = Math.max(60, ...vals);
   const W=560, H=190, pad=26, bw=(W-pad*2)/n;
   let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Focus minutes per day">`;
@@ -256,7 +288,7 @@ function barsByDay(rs, mk){
 }
 
 function donut(st){
-  const parts = [["Completed",st.done,"#5b3f9e"],[" In progress",st.prog,"#c98a2e"],[" Open",st.open,"#c2545f"]];
+  const parts = [["Completed",st.done,"#5b3f9e"],["In progress",st.prog,"#c98a2e"],["Open",st.open,"#c2545f"]];
   const total = st.tasks;
   if(!total) return '<p class="empty">No tasks logged for this month.</p>';
   const R=58, C=2*Math.PI*R; let off=0;
@@ -276,7 +308,7 @@ function donut(st){
 }
 
 function hbars(list, valueFn, labelFn, selected, color){
-  if(!list.length) return '<p class="empty"></p>';
+  if(!list.length) return '<p class="empty">Nothing to compare yet.</p>';
   const max = Math.max(1, ...list.map(valueFn));
   const rowH=30, W=560, labelW=74, H=list.length*rowH+8;
   let s = `<svg viewBox="0 0 ${W} ${H}">`;
@@ -312,17 +344,39 @@ function render(){
   const teamLOC = all.reduce((a,s)=>a+s.totalLOC,0);
 
   /* --- individual --- */
+  // Most recent logged day's numbers (not team data) for the first row of
+  // each KPI card; the second row is this trainee's own month total.
+  const datedRows = me.rows.filter(r=>r.date);
+  // "Today" is whatever the most recent date IN THE SHEET is — not the
+  // real-world clock date, which won't reliably line up with when entries
+  // were logged. That day's data is treated as still in progress, so the
+  // KPI cards show the day before it: the last one that's actually done.
+  const newestLogged = datedRows.length ? Math.max(...datedRows.map(r=>r.date)) : null;
+  const pastRows = newestLogged==null ? [] : datedRows.filter(r=>r.date.getTime() < newestLogged);
+  const lastDate = pastRows.length ? new Date(Math.max(...pastRows.map(r=>r.date))) : null;
+  const dayRows = lastDate ? pastRows.filter(r=>r.date.toDateString()===lastDate.toDateString()) : [];
+  const dayShort = lastDate ? lastDate.toLocaleDateString(undefined, {month:"short", day:"numeric"}) : "no entry";
+  const totalLabel = me.name+" total";
+
+  const lastDayMins   = dayRows.reduce((a,r)=>a+focusMinutesOf(r),0);
+  const lastDayTasks  = dayRows.length;
+  const lastDayDone   = dayRows.filter(r=>effectiveStatus(r, me.statusMap)==="done").length;
+  const lastDayRate   = dayRows.length ? Math.round(lastDayDone/dayRows.length*100) : 0;
+  const lastDayCode   = dayRows.reduce((a,r)=>a+codeMinutesOf(r),0);
+  const lastDayScreen = dayRows.reduce((a,r)=>a+screenMinutesOf(r),0);
+  const lastDayLOC    = dayRows.reduce((a,r)=>a+locOf(r),0);
+
   $("#oneKpis").innerHTML =
-    kpi("TOTAL FOCUS TIME", [[me.name, hm(me.minutes)], ["Team avg", hm(teamMins/all.length), 1]]) +
-    kpi("TASKS LOGGED",     [[me.name, me.tasks], ["Team avg", (teamTasks/all.length).toFixed(1), 1]]) +
-    kpi("COMPLETION RATE",  [[me.name, me.rate+"%"], ["Team avg", teamRate+"%", 1]]) +
+    kpi("TOTAL FOCUS TIME", [["Focus · "+dayShort, hm(lastDayMins)], [totalLabel, hm(me.minutes), 1]]) +
+    kpi("TASKS LOGGED",     [["Tasks · "+dayShort, lastDayTasks], [totalLabel, me.tasks, 1]]) +
+    kpi("COMPLETION RATE",  [["Rate · "+dayShort, lastDayRate+"%"], [totalLabel, me.rate+"%", 1]]) +
     kpi("AVG PER ACTIVE DAY",[[me.name, hm(me.perDay)], ["Active days", me.activeDays, 1]]);
 
-  // New KPI row for the columns added to the sheet.
+  // New KPI row for the columns added to the sheet — same latest-day-vs-own-total pattern.
   $("#codeKpis").innerHTML =
-    kpi("TOTAL CODE TIME",  [[me.name, hm(me.codeMins)], ["Team avg", hm(teamCodeMins/all.length), 1]]) +
-    kpi("TOTAL SCREEN TIME",[[me.name, hm(me.screenMins)], ["Team avg", hm(teamScreenMins/all.length), 1]]) +
-    kpi("LINES OF CODE",    [[me.name, me.totalLOC], ["Team avg", Math.round(teamLOC/all.length), 1]]) +
+    kpi("TOTAL CODE TIME",  [["Code · "+dayShort, hm(lastDayCode)], [totalLabel, hm(me.codeMins), 1]]) +
+    kpi("TOTAL SCREEN TIME",[["Screen · "+dayShort, hm(lastDayScreen)], [totalLabel, hm(me.screenMins), 1]]) +
+    kpi("LINES OF CODE",    [["Lines · "+dayShort, lastDayLOC], [totalLabel, me.totalLOC, 1]]) +
     kpi("MAIN LANGUAGE",    [[me.name, me.mainLang], ["Tasks with a language", me.langTasks, 1]]);
 
   $("#dailyChart").innerHTML = barsByDay(me.rows, mk);
@@ -346,13 +400,6 @@ function render(){
       }).join("")+`</tbody></table>`
     : '<p class="empty">No rows for this trainee in the selected month.</p>';
 
-  const issues = me.rows.filter(r=>r.issue);
-  $("#issueList").innerHTML = issues.length
-    ? issues.map(r=>`<div class="issue">
-        <b class="issue-date">${r.date?r.date.toLocaleDateString():r.dateRaw}</b>
-        <span class="issue-task"> · ${esc(r.task)||"task not named"}</span>
-        <div>${esc(r.issue)}</div></div>`).join("")
-    : '<p class="empty"></p>';
 
   /* --- team --- */
   const top = [...all].sort((a,b)=>b.minutes-a.minutes)[0];
@@ -360,7 +407,7 @@ function render(){
     kpi("TOTAL TEAM FOCUS", [["All trainees", hm(teamMins)], [me.name, hm(me.minutes), 1]]) +
     kpi("TEAM COMPLETION",  [["Team avg", teamRate+"%"], [me.name, me.rate+"%", 1]]) +
     kpi("TASKS THIS MONTH", [["All trainees", teamTasks], [me.name, me.tasks, 1]]) +
-    kpi("MOST FOCUS TIME",  [[top.name, hm(top.minutes)], ["Open issues (team)", all.reduce((a,s)=>a+s.issues,0), 1]]);
+    kpi("MOST FOCUS TIME",  [[top.name, hm(top.minutes)], ["Team avg", hm(teamMins/all.length), 1]]);
 
   const byHours = [...all].sort((a,b)=>b.minutes-a.minutes);
   $("#teamHours").innerHTML = hbars(byHours, d=>d.minutes, d=>hm(d.minutes), who, "#5b3f9e");
@@ -368,12 +415,12 @@ function render(){
 
   $("#teamTable").innerHTML = `<table><thead><tr>
       <th>#</th><th>Trainee</th><th>Focus time</th><th>Active days</th><th>Avg / day</th>
-      <th>Tasks</th><th>Completed</th><th>Rate</th><th>Issues</th>
+      <th>Tasks</th><th>Completed</th><th>Rate</th>
       <th>Code time</th><th>Lines of code</th></tr></thead><tbody>`+
       byHours.map((s,i)=>`<tr class="${s.name===who?'me':''}">
         <td class="rank">${i+1}</td><td><b>${s.name}</b></td><td>${hm(s.minutes)}</td>
         <td>${s.activeDays}</td><td>${hm(s.perDay)}</td><td>${s.tasks}</td>
-        <td>${s.done}</td><td>${s.rate}%</td><td>${s.issues}</td>
+        <td>${s.done}</td><td>${s.rate}%</td>
         <td>${hm(s.codeMins)}</td><td>${s.totalLOC}</td></tr>`).join("")+
     `</tbody></table>`;
 
