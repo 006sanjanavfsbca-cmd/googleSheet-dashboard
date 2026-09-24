@@ -7,7 +7,7 @@ const CONFIG = {
   sheetId: "",
   // Tab names exactly as they appear at the bottom of the sheet
   trainees: ["Alvin","Goutham","Sarath","Ilfa","Sanjana","Sneha","Lena"],
-  marksTab: "BCA MARKS",
+  marksTab: "Mark Sheet",
   // Words in the Status column that count as finished
   doneWords: ["done","completed","complete","finished","yes","closed"],
   progressWords: ["progress","ongoing","working","started","wip"]
