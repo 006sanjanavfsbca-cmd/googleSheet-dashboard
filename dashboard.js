@@ -7,7 +7,7 @@ const CONFIG = {
   sheetId: "",
   // Tab names exactly as they appear at the bottom of the sheet
   trainees: ["Alvin","Goutham","Sarath","Ilfa","Sanjana","Sneha","Lena"],
-  marksTab: "Mark Sheet",
+  marksTab: "BCA MARKS",
   // Words in the Status column that count as finished
   doneWords: ["done","completed","complete","finished","yes","closed"],
   progressWords: ["progress","ongoing","working","started","wip"]
@@ -212,6 +212,53 @@ function rowsFor(name, mk){
   return mk ? rs.filter(r=> r.date && monthKey(r.date)===mk) : rs;
 }
 
+// The BCA MARKS tab has a "Semester" column (values like 1, 2) merged down
+// across each block of subjects, same as Date is merged in the task sheet.
+// Carry that (and Subject, merged per-trainee-block) down over blank rows,
+// then group into one table per semester instead of one long flat table.
+function renderMarksBySemester(marks){
+  if(!marks || !marks.length) return '<p class="empty">The BCA MARKS tab is empty or has not been synced yet.</p>';
+  const head = marks[0];
+  const semIdx  = head.findIndex(h=>norm(h).includes("semester"));
+  const subjIdx = head.findIndex(h=>norm(h).includes("subject"));
+  if(semIdx<0){
+    // No Semester column found — fall back to the old flat table so
+    // nothing breaks if the sheet's header text changes.
+    return `<table><thead><tr>`+head.map(c=>`<th>${esc(c)}</th>`).join("")+`</tr></thead><tbody>`+
+      marks.slice(1).map(r=>`<tr>`+r.map(c=>`<td>${esc(c)}</td>`).join("")+`</tr>`).join("")+
+      `</tbody></table>`;
+  }
+
+  const groups = {}; // semester label -> rows (each row still has all columns)
+  let lastSem = "", lastSubj = "";
+  for(let i=1;i<marks.length;i++){
+    const row = marks[i].slice();
+    if(!row.some(c=>(c||"").toString().trim()!=="")) continue; // fully blank row
+    const semVal = (row[semIdx]||"").toString().trim();
+    if(semVal) lastSem = semVal; else row[semIdx] = lastSem;
+    if(subjIdx>=0){
+      const subjVal = (row[subjIdx]||"").toString().trim();
+      if(subjVal) lastSubj = subjVal; else row[subjIdx] = lastSubj;
+    }
+    const key = lastSem || "Unspecified";
+    (groups[key] = groups[key] || []).push(row);
+  }
+
+  const cols = head.map((c,i)=>i).filter(i=>i!==semIdx); // hide the Semester column — the heading already says it
+  const semesters = Object.keys(groups).sort((a,b)=>{
+    const na=parseFloat(a), nb=parseFloat(b);
+    return (!isNaN(na)&&!isNaN(nb)) ? na-nb : a.localeCompare(b);
+  });
+
+  return semesters.map(sem=>{
+    const rows = groups[sem];
+    return `<h4 class="sem-heading">Semester ${esc(sem)}</h4>
+      <table><thead><tr>`+cols.map(i=>`<th>${esc(head[i])}</th>`).join("")+`</tr></thead><tbody>`+
+      rows.map(r=>`<tr>`+cols.map(i=>`<td>${esc(r[i]||"")}</td>`).join("")+`</tr>`).join("")+
+      `</tbody></table>`;
+  }).join("");
+}
+
 function stats(name, mk){
   const rs = rowsFor(name, mk).filter(r=>r.task || r.dur || r.start);
   const statusMap = currentStatusMap(rs);
@@ -362,12 +409,20 @@ function render(){
   // Most recent logged day's numbers (not team data) for the first row of
   // each KPI card; the second row is this trainee's own month total.
   const datedRows = me.rows.filter(r=>r.date);
-  // "Today" is whatever the most recent date IN THE SHEET is — not the
-  // real-world clock date, which won't reliably line up with when entries
-  // were logged. That day's data is treated as still in progress, so the
-  // KPI cards show the day before it: the last one that's actually done.
-  const newestLogged = datedRows.length ? Math.max(...datedRows.map(r=>r.date)) : null;
-  const pastRows = newestLogged==null ? [] : datedRows.filter(r=>r.date.getTime() < newestLogged);
+  // "Today" is the real calendar date — a day already in the past (like
+  // yesterday) should show its full numbers, not get skipped. We only
+  // treat a day as "still in progress" (and skip to the day before it)
+  // when it's actually today's real date, since that day's log may not
+  // be finished yet.
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  let pastRows = datedRows.filter(r=>r.date.getTime() < todayStart.getTime());
+  if(!pastRows.length && datedRows.length){
+    // Nothing strictly before today (e.g. everything so far is dated
+    // today, or the device clock is off) — fall back to the day before
+    // whatever the newest logged entry is, so the card isn't left empty.
+    const newestLogged = Math.max(...datedRows.map(r=>r.date));
+    pastRows = datedRows.filter(r=>r.date.getTime() < newestLogged);
+  }
   const lastDate = pastRows.length ? new Date(Math.max(...pastRows.map(r=>r.date))) : null;
   const dayRows = lastDate ? pastRows.filter(r=>r.date.toDateString()===lastDate.toDateString()) : [];
   const dayShort = lastDate ? lastDate.toLocaleDateString(undefined, {month:"short", day:"numeric"}) : "no entry";
@@ -449,11 +504,7 @@ function render(){
     `</tbody></table>`;
 
   /* --- marks --- */
-  $("#marksTable").innerHTML = DATA.marks.length
-    ? `<table><thead><tr>`+DATA.marks[0].map(c=>`<th>${esc(c)}</th>`).join("")+`</tr></thead><tbody>`+
-      DATA.marks.slice(1).map(r=>`<tr>`+r.map(c=>`<td>${esc(c)}</td>`).join("")+`</tr>`).join("")+
-      `</tbody></table>`
-    : '<p class="empty">The BCA MARKS tab is empty or has not been synced yet.</p>';
+  $("#marksTable").innerHTML = renderMarksBySemester(DATA.marks);
 
   $("#footnote").textContent =
     "Focus time uses the Duration column; when it is blank the dashboard works it out from StartTime and EndTime. " +
