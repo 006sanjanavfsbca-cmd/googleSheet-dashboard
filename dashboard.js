@@ -10,7 +10,8 @@ const CONFIG = {
   marksTab: "Mark Sheet",
   // Words in the Status column that count as finished
   doneWords: ["done","completed","complete","finished","yes","closed"],
-  progressWords: ["progress","ongoing","working","started","wip"]
+  // "paused" groups with the in-progress bucket: work was started, just on hold.
+  progressWords: ["progress","ongoing","working","started","wip","paused"]
 };
 
 const LS = { id:"vonnue.sheetId", cache:"vonnue.cache" };
@@ -33,7 +34,6 @@ async function fetchTab(tab){
   if(text.trim().startsWith("<")) throw new Error("Sheet is not readable. Set sharing to \u201cAnyone with the link\u201d.");
   return parseCSV(text);
 }
-
 function parseCSV(text){
   const rows=[]; let row=[], cur="", q=false;
   for(let i=0;i<text.length;i++){
@@ -78,24 +78,47 @@ function toObjects(rows){
     lang:idx("language"), loc:idx("lineofcode"), total:idx("total")
   };
   if(col.issue<0) col.issue = head.findIndex(x=>x.startsWith("issue"));
+  // Attendance column — sheet header is spelled "Attendence", so match
+  // loosely on "atten" rather than the exact (and possibly corrected) word.
+  col.attendance = head.findIndex(x=>x.includes("atten"));
   const get=(r,i)=> i>=0 && r[i]!=null ? r[i].trim() : "";
   const objs = rows.slice(h+1).map(r=>({
     dateRaw:get(r,col.date), task:get(r,col.task), start:get(r,col.start),
     end:get(r,col.end), dur:get(r,col.dur), status:get(r,col.status),
-    issue:get(r,col.issue),
+    issue:get(r,col.issue), attendance:get(r,col.attendance),
     // --- new columns ---
     focus:get(r,col.focus), code:get(r,col.code), screen:get(r,col.screen),
     lang:get(r,col.lang), loc:get(r,col.loc), total:get(r,col.total)
   })).filter(r=> r.dateRaw || r.task);
-  // Sheets are usually filled with the Date cell only on the first task of
-  // the day, leaving it blank for later tasks that same day. Carry the last
-  // seen date down onto those blank rows so they aren't dropped as undated.
-  let lastDate = "";
+  // Sheets are usually filled with the Date (and Attendance) cell only on
+  // the first task of the day, leaving it blank for later tasks that same
+  // day. Carry the last seen value down onto those blank rows so they
+  // aren't dropped as undated / unmarked.
+  let lastDate = "", lastAttendance = "";
   objs.forEach(o=>{
     if(o.dateRaw) lastDate = o.dateRaw;
     else o.dateRaw = lastDate;
+    if(o.attendance) lastAttendance = o.attendance;
+    else o.attendance = lastAttendance;
   });
   return objs;
+}
+
+// Normalizes an Attendance cell ("PRESENT", "HALF DAY", "Leave"...) into
+// one of a few known buckets so spelling/casing differences in the sheet
+// don't matter.
+function attendanceBucket(s){
+  const t = (s||"").toString().trim().toUpperCase();
+  if(!t) return "";
+  if(t.includes("HALF")) return "half";
+  if(t.includes("LEAVE") || t.includes("ABSENT")) return "leave";
+  if(t.includes("PRESENT")) return "present";
+  return "other";
+}
+function attendanceLabel(s){
+  const b = attendanceBucket(s);
+  return b==="half" ? "Half Day" : b==="leave" ? "Leave" : b==="present" ? "Present"
+       : (s ? s : "No entry yet");
 }
 
 function parseDate(s){
@@ -161,6 +184,11 @@ const locOf = r => {
 function statusOf(r){
   const s = norm(r.status);
   if(!s) return r.end ? "done" : "open";
+  // Guard FIRST: "In-Complete" / "Not Complete" normalize to "incomplete" /
+  // "notcomplete", which contain "complete" as a substring and would
+  // otherwise be wrongly matched as done below. These mean the opposite —
+  // treat them as not finished.
+  if(s.includes("incomplete") || s.includes("notcomplete")) return "open";
   if(CONFIG.doneWords.some(w=>s.includes(w))) return "done";
   if(CONFIG.progressWords.some(w=>s.includes(w))) return "progress";
   return "open";
@@ -314,6 +342,35 @@ function stats(name, mk){
            codeMins, screenMins, totalLOC, mainLang, langTasks, statusMap };
 }
 
+// Counts HALF DAY / LEAVE / PRESENT by distinct calendar day (not by row —
+// a day has one attendance value but can have many task rows) for a
+// trainee in a given month (mk), or across everything if mk is null.
+function attendanceStats(name, mk){
+  const rs = rowsFor(name, mk).filter(r=>r.date);
+  const byDate = {};
+  rs.forEach(r=>{
+    const key = r.date.toDateString();
+    if(!(key in byDate)) byDate[key] = r.attendance;
+  });
+  let half=0, leave=0, present=0, other=0;
+  Object.values(byDate).forEach(a=>{
+    const b = attendanceBucket(a);
+    if(b==="half") half++; else if(b==="leave") leave++;
+    else if(b==="present") present++; else if(b) other++;
+  });
+  return { half, leave, present, other, days: Object.keys(byDate).length };
+}
+
+// Today's own attendance mark for a trainee, looked up across ALL of
+// their rows (not just the selected month), since "today" is a fixed
+// real-world date regardless of which month is being viewed.
+function todayAttendance(name){
+  const rs = rowsFor(name, null).filter(r=>r.date);
+  const todayStr = new Date().toDateString();
+  const row = rs.find(r=>r.date.toDateString()===todayStr && r.attendance);
+  return row ? row.attendance : "";
+}
+
 function allMonths(){
   const set = new Set();
   CONFIG.trainees.forEach(n => (DATA.rows[n]||[]).forEach(r=>{
@@ -398,6 +455,11 @@ function render(){
   const who = $("#traineeSel").value;
   const all = CONFIG.trainees.map(n=>stats(n, mk));
   const me = all.find(s=>s.name===who) || stats(who, mk);
+  // All-time stats for this trainee (no month filter) — the "<name> total"
+  // row on each KPI card should always be their running total across every
+  // month, not reset to 0 just because the currently selected month hasn't
+  // had that column filled in yet.
+  const meAll = stats(who, null);
   const teamMins = all.reduce((a,s)=>a+s.minutes,0);
   const teamRate = Math.round(all.reduce((a,s)=>a+s.rate,0)/all.length);
   const teamTasks = all.reduce((a,s)=>a+s.tasks,0);
@@ -408,21 +470,15 @@ function render(){
   /* --- individual --- */
   // Most recent logged day's numbers (not team data) for the first row of
   // each KPI card; the second row is this trainee's own month total.
-  const datedRows = me.rows.filter(r=>r.date);
-  // "Today" is the real calendar date — a day already in the past (like
-  // yesterday) should show its full numbers, not get skipped. We only
-  // treat a day as "still in progress" (and skip to the day before it)
-  // when it's actually today's real date, since that day's log may not
-  // be finished yet.
+  // This always looks at yesterday-or-earlier, and searches ALL of this
+  // trainee's rows (not just the selected month) so it can still find
+  // yesterday even when it falls in a different month than the one being
+  // viewed. Today itself is intentionally skipped — that day's log may
+  // still be in progress, so "yesterday" is the more trustworthy number.
+  const allMyRows = rowsFor(me.name, null).filter(r=>r.task || r.dur || r.start);
+  const datedRows = allMyRows.filter(r=>r.date);
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  let pastRows = datedRows.filter(r=>r.date.getTime() < todayStart.getTime());
-  if(!pastRows.length && datedRows.length){
-    // Nothing strictly before today (e.g. everything so far is dated
-    // today, or the device clock is off) — fall back to the day before
-    // whatever the newest logged entry is, so the card isn't left empty.
-    const newestLogged = Math.max(...datedRows.map(r=>r.date));
-    pastRows = datedRows.filter(r=>r.date.getTime() < newestLogged);
-  }
+  const pastRows = datedRows.filter(r=>r.date.getTime() < todayStart.getTime());
   const lastDate = pastRows.length ? new Date(Math.max(...pastRows.map(r=>r.date))) : null;
   const dayRows = lastDate ? pastRows.filter(r=>r.date.toDateString()===lastDate.toDateString()) : [];
   const dayShort = lastDate ? lastDate.toLocaleDateString(undefined, {month:"short", day:"numeric"}) : "no entry";
@@ -433,9 +489,13 @@ function render(){
   // (latest-known) status — same rule as the totals and the donut.
   const dayTaskKeys = new Set(dayRows.map(r=>taskKey(r.task)).filter(Boolean));
   const lastDayTasks = dayTaskKeys.size || dayRows.length;
+  // Use a status map built from ALL of this trainee's rows, not just the
+  // selected month's (me.statusMap) — "yesterday" can fall outside the
+  // currently viewed month, and its tasks need to be looked up there too.
+  const allStatusMap = currentStatusMap(allMyRows);
   let lastDayDoneCount = 0;
   if(dayTaskKeys.size){
-    dayTaskKeys.forEach(k=>{ if((me.statusMap[k]||"")==="done") lastDayDoneCount++; });
+    dayTaskKeys.forEach(k=>{ if((allStatusMap[k]||"")==="done") lastDayDoneCount++; });
   } else {
     lastDayDoneCount = dayRows.filter(r=>statusOf(r)==="done").length;
   }
@@ -446,17 +506,17 @@ function render(){
   const lastDayLOC    = dayRows.reduce((a,r)=>a+locOf(r),0);
 
   $("#oneKpis").innerHTML =
-    kpi("TOTAL FOCUS TIME", [["Focus · "+dayShort, hm(lastDayMins)], [totalLabel, hm(me.minutes), 1]]) +
-    kpi("TASKS LOGGED",     [["Tasks · "+dayShort, lastDayTasks], [totalLabel, me.tasks, 1]]) +
-    kpi("COMPLETION RATE",  [["Rate · "+dayShort, lastDayRate+"%"], [totalLabel, me.rate+"%", 1]]) +
-    kpi("AVG PER ACTIVE DAY",[[me.name, hm(me.perDay)], ["Active days", me.activeDays, 1]]);
+    kpi("TOTAL FOCUS TIME", [["Focus · "+dayShort, hm(lastDayMins)], [totalLabel, hm(meAll.minutes), 1]]) +
+    kpi("TASKS LOGGED",     [["Tasks · "+dayShort, lastDayTasks], [totalLabel, meAll.tasks, 1]]) +
+    kpi("COMPLETION RATE",  [["Rate · "+dayShort, lastDayRate+"%"], [totalLabel, meAll.rate+"%", 1]]) +
+    kpi("AVG PER ACTIVE DAY",[[me.name, hm(meAll.perDay)], ["Active days", meAll.activeDays, 1]]);
 
   // New KPI row for the columns added to the sheet — same latest-day-vs-own-total pattern.
   $("#codeKpis").innerHTML =
-    kpi("TOTAL CODE TIME",  [["Code · "+dayShort, hm(lastDayCode)], [totalLabel, hm(me.codeMins), 1]]) +
-    kpi("TOTAL SCREEN TIME",[["Screen · "+dayShort, hm(lastDayScreen)], [totalLabel, hm(me.screenMins), 1]]) +
-    kpi("LINES OF CODE",    [["Lines · "+dayShort, lastDayLOC], [totalLabel, me.totalLOC, 1]]) +
-    kpi("MAIN LANGUAGE",    [[me.name, me.mainLang], ["Tasks with a language", me.langTasks, 1]]);
+    kpi("TOTAL CODE TIME",  [["Code · "+dayShort, hm(lastDayCode)], [totalLabel, hm(meAll.codeMins), 1]]) +
+    kpi("TOTAL SCREEN TIME",[["Screen · "+dayShort, hm(lastDayScreen)], [totalLabel, hm(meAll.screenMins), 1]]) +
+    kpi("LINES OF CODE",    [["Lines · "+dayShort, lastDayLOC], [totalLabel, meAll.totalLOC, 1]]) +
+    kpi("MAIN LANGUAGE",    [[me.name, meAll.mainLang], ["Tasks with a language", meAll.langTasks, 1]]);
 
   $("#dailyChart").innerHTML = barsByDay(me.rows, mk);
   $("#statusChart").innerHTML = donut(me);
@@ -469,7 +529,10 @@ function render(){
       log.map(r=>{
         const s=statusOf(r);
         const cls = s==="done"?"p-done":s==="progress"?"p-prog":"p-open";
-        const txt = s==="done"?"Completed":s==="progress"?"In progress":(r.status||"Open");
+        // Show the sheet's own wording (Started / Paused / In-Progress /
+        // In-Complete...) rather than flattening every bucket to one label,
+        // so the task log still reflects exactly what was typed in.
+        const txt = r.status || (s==="done"?"Completed":s==="progress"?"In progress":"Open");
         return `<tr><td>${r.date?r.date.toLocaleDateString():r.dateRaw}</td><td>${esc(r.task)||"—"}</td>
         <td>${esc(r.start)||"—"}</td><td>${esc(r.end)||"—"}</td><td>${minutesOf(r)?hm(minutesOf(r)):"—"}</td>
         <td>${esc(r.focus)||"—"}</td>
@@ -479,6 +542,18 @@ function render(){
       }).join("")+`</tbody></table>`
     : '<p class="empty">No rows for this trainee in the selected month.</p>';
 
+  /* --- attendance (bottom of dashboard view) --- */
+  const attMonth = attendanceStats(me.name, mk);
+  const attAll = attendanceStats(me.name, null);
+  // Two half days add up to one leave for this combined count.
+  const leaveNum = n => n % 1 === 0 ? String(n) : n.toFixed(1);
+  const combinedAll   = leaveNum(attAll.leave + attAll.half/2);
+  $("#attendanceKpis").innerHTML =
+    kpi("TODAY'S STATUS", [[me.name, attendanceLabel(todayAttendance(me.name))]]) +
+    kpi("PRESENT DAYS",   [["This month", attMonth.present], ["All time", attAll.present, 1]]) +
+    kpi("HALF DAYS",      [["This month", attMonth.half], ["All time", attAll.half, 1]]) +
+    kpi("LEAVES",         [["This month", attMonth.leave], ["All time", attAll.leave, 1],
+                            ["All time + half days", combinedAll, 1]]);
 
   /* --- team --- */
   const top = [...all].sort((a,b)=>b.minutes-a.minutes)[0];
@@ -508,7 +583,8 @@ function render(){
 
   $("#footnote").textContent =
     "Focus time uses the Duration column; when it is blank the dashboard works it out from StartTime and EndTime. " +
-    "Code Time, Screen Time, Language and Lines of code come straight from the matching columns in the sheet.";
+    "Code Time, Screen Time, Language and Lines of code come straight from the matching columns in the sheet. " +
+    "Attendance (Present / Half Day / Leave) is read from the Attendance column and counted once per calendar day.";
 }
 
 const esc = s => (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
