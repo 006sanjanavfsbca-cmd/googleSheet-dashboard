@@ -101,7 +101,25 @@ function toObjects(rows){
     if(o.attendance) lastAttendance = o.attendance;
     else o.attendance = lastAttendance;
   });
+  // Different tabs type dates in different orders (month-first like
+  // "9/23/2026", or day-first like "01/10/2026"). A date like "01/10/2026"
+  // is ambiguous on its own, but this whole tab is written consistently,
+  // so detect the order once from any row that ISN'T ambiguous (e.g.
+  // "30/09/2026" can only be day=30) and apply that to every row here.
+  const dmy = detectDateFormat(objs.map(o=>o.dateRaw));
+  objs.forEach(o=>{ o.dmy = dmy; });
   return objs;
+}
+
+function detectDateFormat(dateStrs){
+  for(const s of dateStrs){
+    const m = (s||"").toString().trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+    if(!m) continue;
+    const a=+m[1], b=+m[2];
+    if(a>12) return true;  // day-first (DD/MM) — first part can't be a month
+    if(b>12) return false; // month-first (MM/DD)
+  }
+  return false; // nothing to disambiguate — keep the original default
 }
 
 // Normalizes an Attendance cell ("PRESENT", "HALF DAY", "Leave"...) into
@@ -121,7 +139,7 @@ function attendanceLabel(s){
        : (s ? s : "No entry yet");
 }
 
-function parseDate(s){
+function parseDate(s, dmy){
   if(!s) return null;
   s = s.trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -129,8 +147,11 @@ function parseDate(s){
   m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
   if(m){
     let a=+m[1], b=+m[2], y=+m[3]; if(y<100) y+=2000;
-    // sheet shows MM/DD/YYYY; fall back to DD/MM when the first part can't be a month
-    return a>12 ? new Date(y,b-1,a) : new Date(y,a-1,b);
+    if(a>12) return new Date(y,b-1,a); // first part can't be a month — must be D/M
+    if(b>12) return new Date(y,a-1,b); // second part can't be a month — must be M/D
+    // Genuinely ambiguous (both parts ≤12) — go with this tab's detected
+    // date order (see detectDateFormat), passed in as `dmy`.
+    return dmy ? new Date(y,b-1,a) : new Date(y,a-1,b);
   }
   const d = new Date(s);
   return isNaN(d) ? null : d;
@@ -236,7 +257,7 @@ let DATA = { rows:{}, marks:[], syncedAt:null };
 let view = "one";
 
 function rowsFor(name, mk){
-  const rs = (DATA.rows[name]||[]).map(r=>({...r, date:parseDate(r.dateRaw)}));
+  const rs = (DATA.rows[name]||[]).map(r=>({...r, date:parseDate(r.dateRaw, r.dmy)}));
   return mk ? rs.filter(r=> r.date && monthKey(r.date)===mk) : rs;
 }
 
@@ -371,10 +392,15 @@ function todayAttendance(name){
   return row ? row.attendance : "";
 }
 
-function allMonths(){
+// With no name, every trainee's months (used so the dropdown lists every
+// month anyone has data for). With a name, just that trainee's months —
+// used to pick a sensible DEFAULT month for whoever is currently selected,
+// since "most recent month with data" means something different per person.
+function allMonths(name){
   const set = new Set();
-  CONFIG.trainees.forEach(n => (DATA.rows[n]||[]).forEach(r=>{
-    const d = parseDate(r.dateRaw); if(d) set.add(monthKey(d));
+  const names = name ? [name] : CONFIG.trainees;
+  names.forEach(n => (DATA.rows[n]||[]).forEach(r=>{
+    const d = parseDate(r.dateRaw, r.dmy); if(d) set.add(monthKey(d));
   }));
   return [...set].sort().reverse();
 }
@@ -628,19 +654,21 @@ function stamp(){
 }
 
 function buildMonths(){
-  const months = allMonths();
+  const months = allMonths(); // full list for the dropdown: every month anyone has data for
   const sel = $("#monthSel"), keep = sel.value;
   sel.innerHTML = months.length
     ? months.map(m=>`<option value="${m}">${monthLabel(m)}</option>`).join("")
     : `<option value="">No dates found</option>`;
-  if(months.includes(keep)) sel.value = keep;
-  else{
-    // First load: prefer today's real month over just "the latest date
-    // found in the sheet", so a stray future/old test row can't hijack
-    // the default view.
-    const nowKey = monthKey(new Date());
-    sel.value = months.includes(nowKey) ? nowKey : (months[0] || "");
-  }
+
+  // Default/fallback selection is scoped to the CURRENTLY SELECTED
+  // trainee's own data, not just whoever in the sheet has the newest
+  // entry — otherwise picking a trainee who hasn't logged this month yet
+  // opens on a month with nothing in it for them, even though other
+  // trainees have data there.
+  const who = $("#traineeSel") ? $("#traineeSel").value : "";
+  const theirMonths = allMonths(who);
+  if(months.includes(keep) && theirMonths.includes(keep)) sel.value = keep;
+  else sel.value = theirMonths[0] || months[0] || "";
 }
 
 function init(){
@@ -655,7 +683,9 @@ function init(){
     };
   });
   $("#monthSel").onchange = render;
-  $("#traineeSel").onchange = render;
+  // Switching trainees needs to re-check the month default too — see
+  // buildMonths(), which now scopes the default to whoever is selected.
+  $("#traineeSel").onchange = ()=>{ buildMonths(); render(); };
   $("#syncBtn").onclick = sync;
   $("#saveSheet").onclick = ()=>{
     const raw = $("#sheetInput").value.trim();
